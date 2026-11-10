@@ -2,7 +2,9 @@
 
 SmartBugs Curated marks vulnerable lines with comments such as
 ``// <yes> <report> REENTRANCY`` and file headers containing
-``@vulnerable_at_lines: 31``. If those stay in the indexed text, BM25 and
+``@vulnerable_at_lines: 31``, and many ``@source`` header URLs name the
+category (``.../integer_overflow_minimal.sol``). ``@author`` lines go too, as
+they identify which benchmark suite a file came from. If those stay in the indexed text, BM25 and
 embeddings can match the label itself and the benchmark measures nothing.
 """
 
@@ -12,7 +14,7 @@ import re
 
 _LEAKS = re.compile(
     r"//[ \t]*<yes>[ \t]*<report>[^\n]*"
-    r"|^[ \t]*\*?[ \t]*@vulnerable_at_lines[^\n]*\n?",
+    r"|^[ \t]*\*?[ \t]*@(?:vulnerable_at_lines|source|author)\b[^\n]*\n?",
     re.M,
 )
 

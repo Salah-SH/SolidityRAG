@@ -10,6 +10,8 @@ import typer
 from .generate.answer import DEFAULT_LLM
 from .index.embedder import DEFAULT_MODEL
 from .index.store import Index
+from .ingest.chunker import chunk_source
+from .ingest.fixed import fixed_chunker
 from .ingest.loader import load_chunks
 from .retrieve.bm25 import BM25Retriever
 from .retrieve.dense import DenseRetriever
@@ -47,16 +49,27 @@ def index_cmd(
     out: Path = typer.Option(DEFAULT_INDEX_DIR, "--out", help="Where to save the index."),
     model: str = typer.Option(DEFAULT_MODEL, help="Sentence-transformers model name."),
     embed: bool = typer.Option(True, "--embed/--no-embed", help="Skip embeddings for a BM25-only index."),
+    chunker: str = typer.Option("function", help="function (Solidity-aware) or fixed (line windows, baseline)."),
+    window: int = typer.Option(8, help="Lines per window (--chunker fixed)."),
+    overlap: int = typer.Option(0, help="Lines shared by consecutive windows (--chunker fixed)."),
 ):
     """Chunk a corpus, build the BM25 and dense indexes, and save them."""
-    loaded = load_chunks(corpus)
-    typer.echo(f"{loaded.n_files} files -> {len(loaded.chunks)} chunks")
+    if chunker == "function":
+        chunk_fn, chunking = chunk_source, "function"
+    elif chunker == "fixed":
+        if window < 1 or not 0 <= overlap < window:
+            raise typer.BadParameter("Need window >= 1 and 0 <= overlap < window.")
+        chunk_fn, chunking = fixed_chunker(window, overlap), f"fixed:w={window},o={overlap}"
+    else:
+        raise typer.BadParameter(f"Unknown chunker '{chunker}' (use function or fixed).")
+    loaded = load_chunks(corpus, chunk_fn)
+    typer.echo(f"{loaded.n_files} files -> {len(loaded.chunks)} chunks ({chunking})")
     if loaded.empty_files:
         typer.echo(f"{len(loaded.empty_files)} files produced no chunks, for example:")
         for f in loaded.empty_files[:10]:
             typer.echo(f"  {f}")
     embedder = _make_embedder(model, True) if embed else None
-    idx = Index.build(loaded.chunks, embedder)
+    idx = Index.build(loaded.chunks, embedder, chunking)
     idx.save(out)
     typer.echo(f"Saved index to {out}")
 
@@ -118,10 +131,13 @@ def eval_cmd(
     embedder = _make_embedder(idx.embedder_name, query_prefix) if idx.embeddings is not None else None
     retrievers = _make_retrievers(idx, embedder)
     df = evaluate(retrievers, load_queries(queries), Annotations.from_json(annotations), idx.chunks, k=k)
+    if idx.chunking:
+        df.insert(0, "chunking", idx.chunking)
     if df.empty:
         raise typer.BadParameter("No category has relevant chunks. Check the index and annotations paths.")
 
-    typer.echo(f"\nMacro average over categories (k={k}):")
+    typer.echo(f"\nChunking: {idx.chunking or 'unknown (index built before v0.2)'}")
+    typer.echo(f"Macro average over categories (k={k}):")
     typer.echo(overall(df, k).to_string())
     typer.echo(f"\nPrecision@{k} by category:")
     typer.echo(per_category(df, f"precision@{k}").to_string())

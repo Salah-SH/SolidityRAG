@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .chunker import Chunk, chunk_file
+from typing import Callable
+
+from .chunker import Chunk, chunk_file, chunk_source
 
 
 @dataclass
@@ -15,7 +17,9 @@ class LoadResult:
     n_files: int = 0
 
 
-def load_chunks(root: str | Path) -> LoadResult:
+def load_chunks(
+    root: str | Path, chunk_fn: Callable[[str, str], list[Chunk]] = chunk_source
+) -> LoadResult:
     root = Path(root)
     if root.is_file():
         files, base = [root], root.parent
@@ -24,7 +28,7 @@ def load_chunks(root: str | Path) -> LoadResult:
 
     result = LoadResult(n_files=len(files))
     for f in files:
-        chunks = chunk_file(f, root=base)
+        chunks = chunk_file(f, root=base, chunk_fn=chunk_fn)
         if not chunks:
             result.empty_files.append(f.relative_to(base).as_posix())
         result.chunks.extend(chunks)

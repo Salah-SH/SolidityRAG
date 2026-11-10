@@ -8,14 +8,25 @@ from ..ingest.chunker import Chunk
 from ..ingest.smartbugs import Annotations
 
 
+def vulnerable_lines(chunk: Chunk, annotations: Annotations, category: str) -> set[tuple[str, int]]:
+    """Annotated vulnerable lines of a category that fall inside the chunk, as (file, line)."""
+    return {
+        (chunk.file, line)
+        for ann in annotations.for_file(chunk.file)
+        if ann.category == category
+        for line in ann.lines
+        if chunk.start_line <= line <= chunk.end_line
+    }
+
+
 def is_relevant(chunk: Chunk, annotations: Annotations, category: str) -> bool:
     """A chunk is relevant to a category if it covers an annotated vulnerable line of it."""
-    for ann in annotations.for_file(chunk.file):
-        if ann.category != category:
-            continue
-        if any(chunk.start_line <= line <= chunk.end_line for line in ann.lines):
-            return True
-    return False
+    return bool(vulnerable_lines(chunk, annotations, category))
+
+
+def lines_covered(chunks: Sequence[Chunk]) -> set[tuple[str, int]]:
+    """Distinct source lines spanned by the chunks (overlapping chunks count once)."""
+    return {(c.file, n) for c in chunks for n in range(c.start_line, c.end_line + 1)}
 
 
 def precision_at_k(flags: Sequence[bool], k: int) -> float:

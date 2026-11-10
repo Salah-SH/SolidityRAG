@@ -8,7 +8,7 @@ SolidityRAG helps an LLM audit Solidity code by retrieving the right evidence fi
 
 ## What makes it different
 
-- **Solidity-aware chunking.** One chunk per function, modifier or constructor, tagged with its contract, name and line range, instead of fixed-size text windows that cut functions in half.
+- **Solidity-aware chunking.** One chunk per function, modifier or constructor, tagged with its contract, name and line range, instead of fixed-size text windows that cut functions in half. A fixed-size window chunker is included as a baseline, and so far it scores about as well (see [Chunking baseline](#chunking-baseline)).
 - **Evaluation first.** Every retriever runs against the same labeled data with the same metrics, so "hybrid beats keyword search" is something you can check, not something you assume.
 - **Evidence you can verify.** The LLM must cite numbered evidence blocks, and a citation checker flags any reference to evidence that was never provided.
 
@@ -47,7 +47,7 @@ solidityrag ask data/smartbugs-curated/dataset/reentrancy \
 solidityrag eval --out benchmarks/v0.1/results.csv
 ```
 
-`solidityrag index --no-embed` builds a BM25-only index with no model download. `ask` takes `--retriever bm25|dense|hybrid` and `--k` for the number of chunks.
+`solidityrag index --no-embed` builds a BM25-only index with no model download. `index --chunker fixed --window 8 --overlap 0` builds the fixed-size baseline instead of function chunks. `ask` takes `--retriever bm25|dense|hybrid` and `--k` for the number of chunks.
 
 ## Example
 
@@ -55,17 +55,44 @@ solidityrag eval --out benchmarks/v0.1/results.csv
 
 ## Results
 
-<!-- TODO: replace with the table printed by `solidityrag eval` on your machine. Do not publish numbers you did not produce. -->
+Function-level chunks, top 5 results, from `benchmarks/v0.2/chunking_summary.csv`:
 
 | Retriever | Precision@5 | Hit@5 |
 |---|---|---|
-| bm25 | TBD | TBD |
-| dense | TBD | TBD |
-| hybrid | TBD | TBD |
+| bm25 | 0.126 | 0.296 |
+| dense | 0.156 | 0.444 |
+| hybrid | 0.163 | 0.444 |
 
-Macro average over the SmartBugs Curated categories, 3 query paraphrases per category. Dataset commit: `TBD`. Embedding model: `BAAI/bge-small-en-v1.5`.
+Macro average over the 9 SmartBugs Curated categories, 3 query paraphrases per category. Dataset commit: `230e649123477eff332742a59a1c7cc6dc286cab`. Embedding model: `BAAI/bge-small-en-v1.5`.
 
 A retrieved chunk counts as relevant to a category if its line range covers an annotated vulnerable line of that category. Precision@5 is the share of the top 5 that is relevant, and hit@5 is whether at least one is. Treat these numbers as a pipeline check, not a claim about detection ability (see below).
+
+### Chunking baseline
+
+`scripts/chunking_baseline.py` compares function chunks with fixed-size line windows (8, 16 and 32 lines, each with no overlap and with 50% overlap). The corpus, embedding model, queries and annotations are the same for every configuration.
+
+```bash
+python scripts/chunking_baseline.py data/smartbugs-curated --out benchmarks/v0.2
+```
+
+**Top-k scores are not a fair comparison between chunkers.** Bigger chunks cover more lines, so they hit labeled lines more often without being better. Function chunks also retrieve more text than their size suggests: the mean function is 8.4 lines, but the top 5 cover 76 to 105 lines, because both retrievers favor long functions. The fair comparison gives every chunker the same reading budget. Each retriever reads ranked chunks until a fixed number of source lines is used up.
+
+![Top-5 hit rate against lines read: function chunks read 76 to 105 lines, 8-line windows about 39](benchmarks/v0.2/fig_topk.png)
+
+![Hit rate at equal line budgets of 40, 80 and 160 lines: 8-line windows lead for bm25 and hybrid, all chunkers are close for dense](benchmarks/v0.2/fig_budget.png)
+
+To redraw the figures: `pip install -e ".[plot]"`, then `python scripts/plot_chunking.py benchmarks/v0.2`.
+
+Hit rate with an 80-line budget, over 27 queries (from `benchmarks/v0.2/chunking_budget.csv`):
+
+| Chunker | bm25 | dense | hybrid |
+|---|---|---|---|
+| function | 0.259 | 0.444 | 0.333 |
+| fixed, 8 lines | 0.370 | 0.481 | 0.519 |
+| fixed, 16 lines, 8 overlap | 0.296 | 0.519 | 0.407 |
+| fixed, 32 lines | 0.185 | 0.407 | 0.296 |
+
+At this budget, function chunking does not beat fixed windows, and 8-line windows score slightly higher. Most paired 95% bootstrap intervals for the difference include zero, so 27 queries cannot separate the chunkers. One exception: at 80 lines, hybrid retrieval over 8-line windows finds more labeled vulnerable lines than over function chunks (1.81 vs 1.04, interval -1.26 to -0.33 for function minus fixed). Until the query set is larger, the benefit of Solidity-aware chunking is unproven on this benchmark. Dataset commit: `230e649123477eff332742a59a1c7cc6dc286cab`.
 
 ## How it works
 
@@ -78,6 +105,7 @@ A retrieved chunk counts as relevant to a category if its line range covers an a
 | Module | Role |
 |---|---|
 | `ingest/chunker.py` | one chunk per function, modifier or constructor, with contract, name and line range |
+| `ingest/fixed.py` | fixed-size line windows, the structure-unaware baseline |
 | `ingest/smartbugs.py` | loads the labeled vulnerable lines used as ground truth |
 | `index/` | embedder interface, sentence-transformers backend, saved index |
 | `retrieve/` | BM25, dense and hybrid retrievers behind one interface |
@@ -88,7 +116,7 @@ Design choices worth knowing:
 
 - **Hybrid retrieval uses reciprocal rank fusion.** BM25 scores and cosine similarities are not comparable, but ranks are, so fusion needs no tuned weights.
 - **BM25 uses a positive IDF.** The stock formula scores a term that appears in one of two documents as exactly zero, so on a small corpus (such as a single contract) matching chunks can return nothing. This project uses the always-positive Lucene-style formula.
-- **Dataset labels are stripped before indexing.** SmartBugs files contain comments such as `// <yes> <report> REENTRANCY` that name the answer. They are removed from everything that is indexed or shown to the model.
+- **Dataset labels are stripped before indexing.** SmartBugs files contain comments such as `// <yes> <report> REENTRANCY` that name the answer, and many `@source` header URLs name the category (`.../integer_overflow_minimal.sol`). Both are removed from everything that is indexed or shown to the model, along with `@author` lines. Function chunks never include file headers, but fixed-size windows do.
 - **Evidence labels are short.** The prompt uses `[C1]`, `[C2]` and so on instead of file paths, because models copy long identifiers unreliably.
 
 You can also use the pieces as a library:
@@ -111,13 +139,13 @@ for r in BM25Retriever(index).search("external call before balance update", k=3)
 - **Small categories are noisy.** Some categories have very few annotated chunks (`short_addresses` has one). `eval` prints the number of relevant chunks per category so you can see which scores mean little.
 - **The query set is small.** Three hand-written paraphrases per category, fixed before running. Do not tune them against the metrics.
 - **Long functions are truncated.** The default embedding model reads at most 512 tokens, so the end of a long function may not be embedded.
-- **No baselines yet.** The evaluation compares retrievers with each other. It does not yet compare against fixed-size chunking or an LLM with no retrieval, so it cannot yet show how much Solidity-aware chunking helps.
+- **Only one baseline so far.** Fixed-size chunking is in place. It scores about as well as function chunking, with no difference the 27-query set can resolve. There is no LLM-only baseline yet.
 
 ## Roadmap
 
 In this order, each item only after the previous one is measured:
 
-1. Baselines: fixed-size chunking and an LLM-only mode.
+1. Baselines: an LLM-only mode, and a larger query set so the chunking comparison can resolve differences. Fixed-size chunking is done.
 2. Structural expansion: pull in callers, callees and parent contracts of the top results.
 3. A tree-sitter parser behind the same `Chunk` interface.
 4. A reranker.

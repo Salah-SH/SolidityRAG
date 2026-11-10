@@ -13,7 +13,7 @@ import yaml
 from ..ingest.chunker import Chunk
 from ..ingest.smartbugs import Annotations
 from ..retrieve.base import Retriever
-from .metrics import hit_at_k, is_relevant, precision_at_k
+from .metrics import hit_at_k, is_relevant, lines_covered, precision_at_k, vulnerable_lines
 
 
 def load_queries(path: str | Path | None = None) -> dict[str, list[str]]:
@@ -35,25 +35,38 @@ def evaluate(
 
     Categories with no relevant chunk in the corpus are skipped: nothing could
     be retrieved correctly, so they would only add noise.
+
+    Two extra columns make chunkers of different sizes comparable:
+    ``lines@k`` is the number of distinct source lines in the top k (what the
+    LLM would have to read), and ``vlines@k`` the number of distinct annotated
+    vulnerable lines they contain. Larger or overlapping chunks raise
+    precision and hit rate for free; these two columns show the cost.
     """
     p_col, h_col = f"precision@{k}", f"hit@{k}"
+    l_col, v_col = f"lines@{k}", f"vlines@{k}"
     rows = []
     for category, qs in queries.items():
         n_relevant = sum(is_relevant(c, annotations, category) for c in chunks)
         if n_relevant == 0:
             continue
         for name, retriever in retrievers.items():
-            precisions, hits = [], []
+            precisions, hits, n_lines, n_vlines = [], [], [], []
             for q in qs:
-                flags = [is_relevant(r.chunk, annotations, category) for r in retriever.search(q, k)]
+                top = [r.chunk for r in retriever.search(q, k)]
+                found = [vulnerable_lines(c, annotations, category) for c in top]
+                flags = [bool(f) for f in found]
                 precisions.append(precision_at_k(flags, k))
                 hits.append(hit_at_k(flags, k))
+                n_lines.append(len(lines_covered(top)))
+                n_vlines.append(len(set().union(*found)))
             rows.append(
                 {
                     "retriever": name,
                     "category": category,
                     p_col: mean(precisions),
                     h_col: mean(hits),
+                    l_col: mean(n_lines),
+                    v_col: mean(n_vlines),
                     "n_queries": len(qs),
                     "n_relevant_chunks": n_relevant,
                 }
@@ -63,7 +76,7 @@ def evaluate(
 
 def overall(df: pd.DataFrame, k: int = 5) -> pd.DataFrame:
     """Macro average over categories, so large categories don't dominate."""
-    cols = [f"precision@{k}", f"hit@{k}"]
+    cols = [c for c in (f"precision@{k}", f"hit@{k}", f"vlines@{k}", f"lines@{k}") if c in df]
     return df.groupby("retriever", sort=False)[cols].mean().round(3)
 
 
