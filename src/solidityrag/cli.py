@@ -10,6 +10,7 @@ import typer
 from .generate.answer import DEFAULT_LLM
 from .index.embedder import DEFAULT_MODEL
 from .index.store import Index
+from .ingest.ast import ast_chunker, chunk_source_ast_functions
 from .ingest.chunker import chunk_source
 from .ingest.fixed import fixed_chunker
 from .ingest.loader import load_chunks
@@ -49,8 +50,12 @@ def index_cmd(
     out: Path = typer.Option(DEFAULT_INDEX_DIR, "--out", help="Where to save the index."),
     model: str = typer.Option(DEFAULT_MODEL, help="Sentence-transformers model name."),
     embed: bool = typer.Option(True, "--embed/--no-embed", help="Skip embeddings for a BM25-only index."),
-    chunker: str = typer.Option("function", help="function (Solidity-aware) or fixed (line windows, baseline)."),
-    window: int = typer.Option(8, help="Lines per window (--chunker fixed)."),
+    chunker: str = typer.Option(
+        "function",
+        help="function (regex), ast-function (tree-sitter), ast (size-bounded syntax chunks) "
+        "or fixed (line windows, baseline).",
+    ),
+    window: int = typer.Option(8, help="Lines per window (fixed), or maximum lines per chunk (ast)."),
     overlap: int = typer.Option(0, help="Lines shared by consecutive windows (--chunker fixed)."),
 ):
     """Chunk a corpus, build the BM25 and dense indexes, and save them."""
@@ -60,8 +65,14 @@ def index_cmd(
         if window < 1 or not 0 <= overlap < window:
             raise typer.BadParameter("Need window >= 1 and 0 <= overlap < window.")
         chunk_fn, chunking = fixed_chunker(window, overlap), f"fixed:w={window},o={overlap}"
+    elif chunker == "ast-function":
+        chunk_fn, chunking = chunk_source_ast_functions, "ast-function"
+    elif chunker == "ast":
+        if window < 1:
+            raise typer.BadParameter("Need window >= 1.")
+        chunk_fn, chunking = ast_chunker(window), f"ast:max={window}"
     else:
-        raise typer.BadParameter(f"Unknown chunker '{chunker}' (use function or fixed).")
+        raise typer.BadParameter(f"Unknown chunker '{chunker}' (use function, ast-function, ast or fixed).")
     loaded = load_chunks(corpus, chunk_fn)
     typer.echo(f"{loaded.n_files} files -> {len(loaded.chunks)} chunks ({chunking})")
     if loaded.empty_files:

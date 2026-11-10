@@ -21,6 +21,7 @@ embed = ["sentence-transformers>=3.0"]
 llm = ["anthropic>=0.40"]
 dev = ["pytest>=8"]
 plot = ["matplotlib>=3.7"]
+ast = ["tree-sitter>=0.23", "tree-sitter-solidity>=1.2.11"]
 
 [project.scripts]
 solidityrag = "solidityrag.cli:app"

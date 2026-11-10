@@ -8,6 +8,8 @@ Reads ``chunking_summary.csv`` and ``chunking_budget.csv`` written by
 * ``fig_topk.png``: hit@5 against the lines those 5 chunks cover. Shows that
   function chunks read far more text than 8-line windows at the same k.
 * ``fig_budget.png``: hit rate when every chunker reads the same number of lines.
+* ``fig_ast.png``: AST chunks against fixed windows of the same size (hybrid
+  retrieval, equal line budgets), with function chunks as a reference.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ import pandas as pd  # noqa: E402
 SERIES = [
     ("function", "function chunks", "#2a78d6", "o"),
     ("fixed:w=8,o=0", "fixed, 8 lines", "#eb6834", "s"),
-    ("fixed:w=16,o=8", "fixed, 16 lines, 8 overlap", "#1baf7a", "^"),
+    ("fixed:w=16,o=0", "fixed, 16 lines", "#1baf7a", "^"),
     ("fixed:w=32,o=0", "fixed, 32 lines", "#eda100", "D"),
 ]
 RETRIEVERS = ["bm25", "dense", "hybrid"]
@@ -105,9 +107,38 @@ def plot_budget(budget: pd.DataFrame, out: Path) -> None:
     axes[0].set_ylabel("hit rate (share of queries)")
     _finish(
         fig, axes,
-        "Equal reading budget: fixed windows match or beat function chunks",
+        "Equal reading budget: small windows beat whole-function chunks",
         "Each retriever reads ranked chunks until the budget is used up. 27 queries; most gaps are within noise "
         "(see chunking_budget.csv for intervals).",
+        out,
+    )
+
+
+def plot_ast(budget: pd.DataFrame, out: Path, retriever: str = "hybrid") -> None:
+    sizes = sorted(int(c.split("=")[1]) for c in budget.chunking.unique() if c.startswith("ast:max="))
+    fig, axes = plt.subplots(1, len(sizes), figsize=(11, 3.8), sharey=True)
+    budgets = sorted(budget.budget.unique())
+    for ax, size in zip(axes, sizes):
+        series = [
+            ("function", "function chunks", "#2a78d6", "o"),
+            (f"fixed:w={size},o=0", "fixed window, same size", "#eb6834", "s"),
+            (f"ast:max={size}", "AST chunks (cAST), same size", "#1baf7a", "^"),
+        ]
+        for key, label, color, marker in series:
+            rows = budget[(budget.chunking == key) & (budget.retriever == retriever)].sort_values("budget")
+            ax.plot(rows.budget, rows.hit, color=color, linewidth=2, marker=marker, markersize=7,
+                    markeredgecolor=SURFACE, markeredgewidth=1.5, label=label, zorder=3)
+        ax.set_title(f"chunks of at most {size} lines", loc="left")
+        ax.set_xscale("log", base=2)
+        ax.set_xticks(budgets, [str(b) for b in budgets])
+        ax.minorticks_off()
+        ax.set_xlabel("line budget (lines read per query)")
+    axes[0].set_ylabel(f"hit rate, {retriever} retrieval")
+    _finish(
+        fig, axes,
+        "Syntax-aware boundaries help most at 16 lines",
+        "Same chunk size, different boundaries. AST chunks split at statements and merge small siblings; "
+        "windows cut every N lines. 27 queries.",
         out,
     )
 
@@ -116,6 +147,7 @@ def main() -> None:
     d = Path(sys.argv[1] if len(sys.argv) > 1 else "benchmarks/v0.2")
     plot_topk(pd.read_csv(d / "chunking_summary.csv"), d / "fig_topk.png")
     plot_budget(pd.read_csv(d / "chunking_budget.csv"), d / "fig_budget.png")
+    plot_ast(pd.read_csv(d / "chunking_budget.csv"), d / "fig_ast.png")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Experiment: Solidity-aware function chunks vs fixed-size line windows.
+"""Experiment: function chunks vs fixed-size line windows vs size-bounded AST chunks.
 
 Every configuration is indexed and scored with the same corpus, embedding
 model, queries and annotations, so the chunker is the only thing that changes.
@@ -16,6 +16,10 @@ Two comparisons are written:
   the same reading budget. Each fixed-size chunker is compared with the function
   chunker query by query (paired), with a bootstrap 95% interval on the
   difference.
+* ``chunking_ast_vs_fixed.csv``: the same paired comparison between AST
+  chunks and fixed windows of the same size, which isolates the effect of
+  syntax-aware boundaries. ``chunking_budget_queries.csv`` keeps the
+  per-query scores behind both.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ from solidityrag.eval import evaluate, is_relevant, load_queries
 from solidityrag.eval.metrics import lines_covered, vulnerable_lines
 from solidityrag.index.embedder import BGE_QUERY_PREFIX, DEFAULT_MODEL, SentenceTransformerEmbedder
 from solidityrag.index.store import Index
-from solidityrag.ingest import chunk_source, fixed_chunker, load_chunks
+from solidityrag.ingest import ast_chunker, chunk_source, fixed_chunker, load_chunks
 from solidityrag.ingest.smartbugs import Annotations
 from solidityrag.retrieve import BM25Retriever, DenseRetriever, HybridRetriever
 
@@ -39,10 +43,13 @@ BUDGETS = (40, 80, 160)  # source lines the LLM would read
 POOL = 200  # ranked chunks to draw from when filling a budget
 BOOTSTRAP = 5000
 
-# window 8 matches the mean function chunk (8.4 lines); 16 and 32 show the size trade-off
-CONFIGS = [("function", chunk_source)] + [
-    (f"fixed:w={w},o={o}", fixed_chunker(w, o)) for w in (8, 16, 32) for o in (0, w // 2)
-]
+# window 8 matches the mean function chunk (8.4 lines); 16 and 32 show the size trade-off.
+# ast:max=N are syntax-aware chunks of at most N lines (cAST), the same sizes as the windows.
+CONFIGS = (
+    [("function", chunk_source)]
+    + [(f"fixed:w={w},o={o}", fixed_chunker(w, o)) for w in (8, 16, 32) for o in (0, w // 2)]
+    + [(f"ast:max={m}", ast_chunker(m)) for m in (8, 16, 32)]
+)
 
 
 def budget_scores(retriever, queries, annotations, chunks, budget: int) -> list[dict]:
@@ -136,10 +143,31 @@ def main() -> None:
         budget_summary.append(row)
     budget_summary = pd.DataFrame(budget_summary)
 
+    # same size, different boundaries: each AST budget against the fixed window of that size
+    ast_vs_fixed = []
+    for (name, rname, budget), g in per_query.groupby(["chunking", "retriever", "budget"], sort=False):
+        if not name.startswith("ast:max="):
+            continue
+        size = name.split("=")[1]
+        ref = per_query[
+            (per_query.chunking == f"fixed:w={size},o=0") & (per_query.retriever == rname) & (per_query.budget == budget)
+        ]
+        row = {"size": int(size), "retriever": rname, "budget": budget,
+               "ast_hit": g.hit.mean().round(3), "fixed_hit": ref.hit.mean().round(3),
+               "ast_vlines": g.vlines.mean().round(2), "fixed_vlines": ref.vlines.mean().round(2)}
+        for m in ("hit", "vlines"):
+            mean_d, lo, hi = paired_ci(g[m].to_numpy(float), ref[m].to_numpy(float), rng)
+            row[f"ast_minus_fixed_{m}"] = round(mean_d, 3)
+            row[f"{m}_ci95"] = f"[{lo:+.3f}, {hi:+.3f}]"
+        ast_vs_fixed.append(row)
+    ast_vs_fixed = pd.DataFrame(ast_vs_fixed)
+
     args.out.mkdir(parents=True, exist_ok=True)
     df.to_csv(args.out / "chunking.csv", index=False)
     summary.to_csv(args.out / "chunking_summary.csv", index=False)
     budget_summary.to_csv(args.out / "chunking_budget.csv", index=False)
+    ast_vs_fixed.to_csv(args.out / "chunking_ast_vs_fixed.csv", index=False)
+    per_query.to_csv(args.out / "chunking_budget_queries.csv", index=False)
 
     pd.set_option("display.width", 200)
     print(f"\nDataset commit: {commit}  Embedder: {DEFAULT_MODEL}  k={k}")
@@ -147,7 +175,9 @@ def main() -> None:
     print(summary.to_string(index=False))
     print("\nEqual line budget (paired against the function chunker, 95% bootstrap interval):")
     print(budget_summary.to_string(index=False))
-    print(f"\nSaved chunking.csv, chunking_summary.csv and chunking_budget.csv to {args.out}")
+    print("\nAST chunks against fixed windows of the same size (paired, 95% bootstrap interval):")
+    print(ast_vs_fixed.to_string(index=False))
+    print(f"\nSaved chunking*.csv to {args.out}")
 
 
 if __name__ == "__main__":
