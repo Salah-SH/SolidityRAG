@@ -136,6 +136,3 @@ The tests use a fake embedder and a fake LLM client, so they need no model downl
 
 The benchmark data comes from [SmartBugs Curated](https://github.com/smartbugs/smartbugs-curated). It is not bundled here. Clone it yourself and follow its license.
 
-## License
-
-<!-- TODO: choose a license and add a LICENSE file (MIT and Apache-2.0 are common for tools like this), then name it here. -->
