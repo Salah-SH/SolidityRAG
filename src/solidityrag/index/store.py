@@ -39,6 +39,7 @@ class Index:
         chunks: list[Chunk],
         embeddings: np.ndarray | None = None,
         embedder_name: str | None = None,
+        chunking: str | None = None,
     ):
         if not chunks:
             raise ValueError("Cannot build an index from zero chunks.")
@@ -47,16 +48,19 @@ class Index:
         self.chunks = chunks
         self.embeddings = embeddings
         self.embedder_name = embedder_name
+        self.chunking = chunking  # e.g. "function" or "fixed:w=8,o=0", recorded with results
         self.bm25 = PositiveIdfBM25([tokenize(c.embed_text) for c in chunks])
 
     @classmethod
-    def build(cls, chunks: list[Chunk], embedder: Embedder | None = None) -> "Index":
+    def build(
+        cls, chunks: list[Chunk], embedder: Embedder | None = None, chunking: str | None = None
+    ) -> "Index":
         embeddings = None
         name = None
         if embedder is not None:
             embeddings = np.asarray(embedder.encode([c.embed_text for c in chunks]), dtype=np.float32)
             name = embedder.name
-        return cls(chunks, embeddings, name)
+        return cls(chunks, embeddings, name, chunking)
 
     def save(self, directory: str | Path) -> None:
         d = Path(directory)
@@ -64,7 +68,7 @@ class Index:
         (d / "chunks.json").write_text(
             json.dumps([c.to_dict() for c in self.chunks]), encoding="utf-8"
         )
-        meta = {"n_chunks": len(self.chunks), "embedder": self.embedder_name}
+        meta = {"n_chunks": len(self.chunks), "embedder": self.embedder_name, "chunking": self.chunking}
         (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
         if self.embeddings is not None:
             np.save(d / "embeddings.npy", self.embeddings)
@@ -76,4 +80,4 @@ class Index:
         meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
         emb_path = d / "embeddings.npy"
         embeddings = np.load(emb_path) if emb_path.exists() else None
-        return cls(chunks, embeddings, meta.get("embedder"))
+        return cls(chunks, embeddings, meta.get("embedder"), meta.get("chunking"))

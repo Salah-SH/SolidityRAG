@@ -13,6 +13,7 @@ import re
 from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Callable
 
 from .sanitize import strip_label_leaks
 
@@ -45,6 +46,8 @@ class Chunk:
 
     @property
     def embed_text(self) -> str:
+        if self.kind == "window":  # fixed-size baseline: no structural header
+            return self.clean_text
         return f"// {self.contract}.{self.name}\n{self.clean_text}"
 
     def to_dict(self) -> dict:
@@ -136,8 +139,12 @@ def chunk_source(src: str, file: str = "<memory>") -> list[Chunk]:
     return chunks
 
 
-def chunk_file(path: str | Path, root: str | Path | None = None) -> list[Chunk]:
+def chunk_file(
+    path: str | Path,
+    root: str | Path | None = None,
+    chunk_fn: Callable[[str, str], list[Chunk]] = chunk_source,
+) -> list[Chunk]:
     path = Path(path)
     src = path.read_text(encoding="utf-8", errors="ignore")
     label = path.relative_to(root).as_posix() if root else path.as_posix()
-    return chunk_source(src, label)
+    return chunk_fn(src, label)
