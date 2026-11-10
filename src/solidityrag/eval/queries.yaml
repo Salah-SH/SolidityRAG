@@ -1,0 +1,47 @@
+# One group per SmartBugs Curated category, three paraphrases each.
+# Written as plain-language behavior descriptions, not code, and fixed before
+# looking at any results. Do not tune these against the metrics.
+access_control:
+  - "functions that let any caller change ownership or run privileged logic without checking who the caller is"
+  - "missing authorization on a sensitive function, or authentication that relies on the transaction origin"
+  - "delegating execution to an address or library that an outside user can control"
+
+arithmetic:
+  - "arithmetic on balances or counters with no overflow or underflow check"
+  - "subtracting or multiplying user-supplied amounts so the value can wrap around"
+  - "adding or multiplying to compute token amounts or totals without validating the result"
+
+bad_randomness:
+  - "random numbers derived from block hash, timestamp or other values a miner can influence"
+  - "lottery or game winner chosen using predictable on-chain data"
+  - "pseudo-random value computed from the block number or previous block hash"
+
+denial_of_service:
+  - "loop over an unbounded list of users that can run out of gas"
+  - "a payment to one address that reverts and blocks the function for everyone"
+  - "contract state that an attacker can fill or lock so other users can no longer withdraw"
+
+front_running:
+  - "reward or answer submitted in a transaction that others can copy by paying higher gas"
+  - "outcome that depends on transaction ordering and can be exploited by watching pending transactions"
+  - "puzzle solution revealed in plain transaction data before the reward is paid"
+
+reentrancy:
+  - "external call that sends ether before the sender's balance is updated"
+  - "withdraw function that can be called again from a fallback function before state changes"
+  - "state change that happens after a low-level call transfers value to the caller"
+
+short_addresses:
+  - "function taking an address and an amount whose argument encoding can be truncated"
+  - "token transfer that does not check input length so a short address shifts the amount"
+  - "transfer function that never validates the size of its call data"
+
+time_manipulation:
+  - "logic that depends on the block timestamp or the current time to decide outcomes or payouts"
+  - "time-based condition that a miner can nudge by a few seconds"
+  - "deadline or lottery check that uses the current block time"
+
+unchecked_low_level_calls:
+  - "call, send or callcode whose boolean return value is never checked"
+  - "low-level call that can fail silently while execution carries on"
+  - "sending ether where a failed transfer is ignored"
